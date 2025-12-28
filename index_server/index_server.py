@@ -51,6 +51,14 @@ class IndexState:
                 "last_update": time.time(),
             }
 
+    def mark_server_dead(self, server_id: str):
+        with self.lock:
+            s = self.servers.get(server_id)
+            if s:
+                s["status"] = "dead"
+                s["last_update"] = time.time()
+
+
     def add_file(self, server_id: str, file_name: str, file_size: int):
         with self.lock:
             if file_name not in self.files:
@@ -96,7 +104,20 @@ def handle_connection(conn: socket.socket, addr, state: IndexState):
     ip = addr[0]
     try:
         first = recv_line(conn)
+
         if not first:
+            return
+        
+        # -------- Monitor notification flow --------
+        if first.startswith("SERVER_DOWN "):
+            parts = first.split()
+            if len(parts) != 3:
+                send_line(conn, "ERROR INVALID_SERVER_DOWN")
+                return
+            server_id = parts[1]
+            state.mark_server_dead(server_id)
+            send_line(conn, "OK SERVER_MARKED_DEAD")
+            print(f"[INDEX] Marked {server_id} DEAD from monitor notification")
             return
 
         # -------- Content server flow --------

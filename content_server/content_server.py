@@ -15,11 +15,39 @@ def parse_args():
     parser.add_argument("--index-host", default="127.0.0.1")
     parser.add_argument("--index-port", type=int, default=5050)  # macOS-friendly default
 
+    parser.add_argument("--monitor-host", default="127.0.0.1")
+    parser.add_argument("--monitor-udp-port", type=int, default=6000)
+
+
     return parser.parse_args()
 
 
 active_clients = 0
 active_clients_lock = threading.Lock()
+
+def heartbeat_loop(server_id: str, tcp_port: int, files_dir: str,
+                   monitor_host: str, monitor_udp_port: int):
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+
+    # For localhost testing, tell monitor ip=127.0.0.1
+    ip = "127.0.0.1"
+
+    while True:
+        try:
+            num_files = sum(
+                1 for name in os.listdir(files_dir)
+                if os.path.isfile(os.path.join(files_dir, name))
+            )
+            with active_clients_lock:
+                load = active_clients
+
+            msg = f"HEARTBEAT {server_id} {ip} {tcp_port} {load} {num_files}"
+            sock.sendto(msg.encode(), (monitor_host, monitor_udp_port))
+        except Exception as e:
+            print(f"[CONTENT {server_id}] Heartbeat error: {e}")
+
+        time.sleep(3)  # suggested interval :contentReference[oaicite:8]{index=8}
+
 
 def register_with_index(server_id: str, tcp_port: int, udp_port: int, files_dir: str,
                         index_host: str, index_port: int):
@@ -129,6 +157,14 @@ def main():
         index_port=args.index_port
     )
     print(f"[CONTENT {args.server_id}] Registered OK. Advertised {num_files} files.")
+
+    threading.Thread(
+    target=heartbeat_loop,
+    args=(args.server_id, args.tcp_port, args.files, args.monitor_host, args.monitor_udp_port),
+    daemon=True
+    ).start()
+    print(f"[CONTENT {args.server_id}] Heartbeats -> {args.monitor_host}:{args.monitor_udp_port}")
+
 
 
     server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
