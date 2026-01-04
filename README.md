@@ -214,6 +214,143 @@ Sent immediately when the Monitor detects a heartbeat timeout for a server.
 4. Index marks server dead and stops routing new clients to it
 
 ---
+## State Machines
+
+This section describes the valid states and state transitions of each component in the Micro-CDN system.  
+The state machines represent logical operating modes and are independent of any programming language or implementation details.
+
+---
+
+### Content Server State Machine
+
+Each Content Server follows a clear lifecycle from startup to serving client requests.
+
+#### States
+- **INIT**  
+  The Content Server process has started but has not yet contacted the Index Server.
+
+- **REGISTERING**  
+  The Content Server is connected to the Index Server over TCP and is executing the registration protocol by sending `REGISTER`, one or more `ADD_FILE` messages, and `DONE_FILES`.
+
+- **ACTIVE**  
+  The Content Server is fully operational:
+  - It serves client file download requests over TCP.
+  - It periodically sends UDP heartbeat messages to the Monitor Server.
+  - It serves the files that were advertised during registration.
+
+  In this implementation:
+  - Content Server **CS1** serves files from the directory `content1_files`, which contains:
+    - `file1` (empty file)
+    - `file2` (empty file)
+    - `hello` (text file containing a short message)
+  - Content Server **CS2** serves files from the directory `content2_files`, which contains:
+    - `file3` (empty file)
+    - `file4` (empty file)
+
+  Empty files are treated as valid files with size zero and are served normally by the protocol.
+
+- **DEAD**  
+  The Content Server process has terminated or crashed and no longer sends heartbeat messages.
+
+#### Transitions
+- **INIT → REGISTERING**  
+  Triggered when the Content Server starts and opens a TCP connection to the Index Server.
+
+- **REGISTERING → ACTIVE**  
+  Triggered after receiving `OK REGISTERED` and `OK FILES_ADDED` from the Index Server.
+
+- **ACTIVE → DEAD**  
+  Triggered when the process terminates, crashes, or is manually killed, causing heartbeat messages to stop.
+
+---
+
+### Index Server State Machine
+
+The Index Server maintains global system metadata and routes client requests.
+
+#### States
+- **INIT**  
+  The Index Server has started and is initializing its internal data structures.
+
+- **RUNNING**  
+  The Index Server is actively accepting Content Server registrations, recording file advertisements, and handling client file lookup requests.
+
+- **UPDATING**  
+  The Index Server is processing a failure notification from the Monitor Server and updating the status of a Content Server.
+
+#### Transitions
+- **INIT → RUNNING**  
+  Triggered when the Index Server successfully starts listening on its TCP port.
+
+- **RUNNING → UPDATING**  
+  Triggered upon receiving a `SERVER_DOWN <server_id>` message from the Monitor Server.
+
+- **UPDATING → RUNNING**  
+  Triggered after the specified Content Server is marked as dead and routing information is updated.
+
+---
+
+### Monitor Server State Machine
+
+The Monitor Server detects Content Server failures using periodic heartbeats.
+
+#### States
+- **LISTENING**  
+  The Monitor Server is receiving UDP heartbeat messages from Content Servers.
+
+- **CHECKING**  
+  The Monitor Server periodically checks the time elapsed since the last heartbeat of each Content Server.
+
+- **REPORTING**  
+  A Content Server heartbeat timeout has been detected and the failure is being reported to the Index Server.
+
+#### Transitions
+- **LISTENING → CHECKING**  
+  Triggered periodically based on the configured heartbeat check interval.
+
+- **CHECKING → REPORTING**  
+  Triggered when a Content Server exceeds the heartbeat timeout threshold.
+
+- **REPORTING → LISTENING**  
+  Triggered after sending a `SERVER_DOWN` notification to the Index Server.
+
+---
+
+### Client State Machine
+
+The Client follows a sequential workflow to locate and download a file.
+
+#### States
+- **IDLE**  
+  The Client application has started and is ready to request a file.
+
+- **QUERYING**  
+  The Client is connected to the Index Server and is requesting the location of a file.
+
+- **DOWNLOADING**  
+  The Client is connected to a Content Server and is downloading the requested file.
+
+- **DONE**  
+  The file has been successfully downloaded and saved locally.
+
+- **ERROR**  
+  An error has occurred, such as file not found, invalid response, or connection failure.
+
+#### Transitions
+- **IDLE → QUERYING**  
+  Triggered when the Client sends `HELLO` and `GET <file_name>` to the Index Server.
+
+- **QUERYING → DOWNLOADING**  
+  Triggered when the Index Server returns a valid `SERVER <ip> <port> <server_id> <file_size>` response.
+
+- **QUERYING → ERROR**  
+  Triggered when the Index Server returns `ERROR FILE_NOT_FOUND`.
+
+- **DOWNLOADING → DONE**  
+  Triggered after the Client receives exactly the expected number of bytes from the Content Server.
+
+- **DOWNLOADING → ERROR**  
+  Triggered if the TCP connection closes prematurely or an invalid response is received.
 
 ### Error Handling
 
